@@ -1,0 +1,33 @@
+# Gradle / Kotlin
+.gradle/
+build/
+**/build/
+.kotlin/
+captures/
+
+# Local machine config
+local.properties
+
+# Keystores & signing material (never commit)
+*.keystore
+*.jks
+*.mobileprovision
+
+# Build artifacts / releases
+*.apk
+*.aab
+*.ipa
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+iosApp/build/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

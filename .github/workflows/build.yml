@@ -1,0 +1,84 @@
+name: Build (Pulse)
+run-name: Build artifacts
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build signed APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Build release APK
+        run: chmod +x ./gradlew && ./gradlew :androidApp:assembleRelease --no-daemon
+
+      - uses: kevin-david/zipalign-sign-android-release@v2
+        name: Sign APK
+        id: sign-apk
+        with:
+          releaseDirectory: androidApp/build/outputs/apk/release/
+          signingKeyBase64: ${{ secrets.RELEASE_KEYSTORE }}
+          keyStorePassword: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          zipAlign: true
+        env:
+          BUILD_TOOLS_VERSION: '36.0.0'
+
+      - name: Rename build
+        run: cp ${{ steps.sign-apk.outputs.signedReleaseFile }} pulse-android
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-android
+          path: pulse-android
+
+  build-ios:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Build archive
+        run: |
+          cd iosApp
+          xcodebuild -project Pulse.xcodeproj -scheme Pulse -configuration Release \
+            -archivePath $RUNNER_TEMP/Pulse.xcarchive \
+            -destination generic/platform=iOS \
+            CODE_SIGNING_ALLOWED=NO archive
+
+      - name: Assemble IPA
+        run: |
+          mkdir -p $RUNNER_TEMP/Payload
+          cp -R $RUNNER_TEMP/Pulse.xcarchive/Products/Applications/Pulse.app $RUNNER_TEMP/Payload/
+          cd $RUNNER_TEMP
+          zip -qry pulse-ios Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-ios
+          path: ${{ runner.temp }}/pulse-ios

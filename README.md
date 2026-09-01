@@ -70,9 +70,10 @@ apksigner sign --ks your.keystore --ks-pass pass:*** --out Pulse.apk aligned.apk
 
 `.github/workflows/build.yml` builds on workflow_dispatch (or push to `main`):
 
-- **Android job** (ubuntu): `assembleRelease` → zipalign + apksigner sign → artifact `pulse-android`
-- **iOS job** (macos): unsigned archive → `.ipa` → artifact `pulse-ios`
-- Artifacts are named `pulse-android` / `pulse-ios` (no extension)
+- **Android job** (ubuntu): `assembleRelease` → zipalign + apksigner sign → artifact `pulse-android-<version-name>`
+- **iOS job** (macos): unsigned archive → `.ipa` → artifact `pulse-ios-<version-name>`
+- Version + build timestamp come from `gradle.properties` (`pulse.version`) and the run time;
+  files are named `Pulse_<version>_<MMDD-HHMMSS>.apk` / `.ipa` (no framework label — native builds)
 
 Required repo secrets:
 

@@ -13,10 +13,36 @@ permissions:
   contents: read
 
 jobs:
+  metadata:
+    name: Retrieve metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Specify version
+        id: version
+        run: echo "VERSION=$(awk -F= '/^pulse.version=/{print $2}' gradle.properties)" >> $GITHUB_OUTPUT
+
+      - name: Specify current datetime
+        id: current-datetime
+        run: echo "CURRENT_DATETIME=$(date +'%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      current-datetime: ${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
+      version-name: ${{ steps.version.outputs.VERSION }}_${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
+
   build-android:
     name: Build signed APK
     runs-on: ubuntu-latest
+    needs: metadata
     steps:
+      - name: Confirm build version and datetime
+        run: |
+          echo "Version: ${{ needs.metadata.outputs.version }}"
+          echo "Build datetime: ${{ needs.metadata.outputs.current-datetime }}"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -41,18 +67,24 @@ jobs:
           BUILD_TOOLS_VERSION: '36.0.0'
 
       - name: Rename build
-        run: cp ${{ steps.sign-apk.outputs.signedReleaseFile }} pulse-android
+        run: cp ${{ steps.sign-apk.outputs.signedReleaseFile }} Pulse_${{ needs.metadata.outputs.version-name }}.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pulse-android
-          path: pulse-android
+          name: pulse-android-${{ needs.metadata.outputs.version-name }}
+          path: Pulse_${{ needs.metadata.outputs.version-name }}.apk
 
   build-ios:
     name: Build unsigned IPA
     runs-on: macos-26
+    needs: metadata
     steps:
+      - name: Confirm build version and datetime
+        run: |
+          echo "Version: ${{ needs.metadata.outputs.version }}"
+          echo "Build datetime: ${{ needs.metadata.outputs.current-datetime }}"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -75,10 +107,10 @@ jobs:
           mkdir -p $RUNNER_TEMP/Payload
           cp -R $RUNNER_TEMP/Pulse.xcarchive/Products/Applications/Pulse.app $RUNNER_TEMP/Payload/
           cd $RUNNER_TEMP
-          zip -qry pulse-ios Payload
+          zip -qry Pulse_${{ needs.metadata.outputs.version-name }}.ipa Payload
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pulse-ios
-          path: ${{ runner.temp }}/pulse-ios
+          name: pulse-ios-${{ needs.metadata.outputs.version-name }}
+          path: ${{ runner.temp }}/Pulse_${{ needs.metadata.outputs.version-name }}.ipa

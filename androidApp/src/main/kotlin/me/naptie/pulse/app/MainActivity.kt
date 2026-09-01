@@ -253,8 +253,13 @@ fun DevicesScreen(
     onPick: (DeviceInfo?) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    var prevIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(devices) {
-        if (listState.firstVisibleItemIndex <= 1) listState.scrollToItem(0)
+        val cur = listState.firstVisibleItemIndex
+        if (prevIndex <= 1 && cur > prevIndex && !listState.isScrollInProgress) {
+            listState.scrollToItem(0)
+        }
+        prevIndex = listState.firstVisibleItemIndex
     }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(20.dp))

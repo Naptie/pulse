@@ -85,3 +85,18 @@ Required repo secrets:
 - Android: `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT` (API 31+); classic Bluetooth +
   `ACCESS_FINE_LOCATION` (API ≤ 30, required for BLE scans)
 - iOS: `NSBluetoothAlwaysUsageDescription`, background mode `bluetooth-central`
+
+## SPP adapter (branch `spp`)
+
+The `spp` branch adds a JDY-31 classic-Bluetooth SPP adapter for team devices
+that are not BLE:
+
+- Module: JDY-31 (SPP transparent serial, UART 3.3V, pair via phone settings)
+- Wire protocol: CRLF-terminated ASCII lines, ~2 Hz:
+  `HR=98 SPO2=91%` (`--` when a sensor value is invalid)
+- Android: classic discovery (BLUETOOTH_SCAN) + RFCOMM socket
+  (`00001101-0000-1000-8000-00805f9b34fb`), merged with the BLE scan via
+  `AndroidHybridPlatform`; the engine and UIs are unchanged
+- iOS: CoreBluetooth has no classic-SPP access — that path needs MFi-certified
+  accessory hardware, so this branch keeps the BLE-only iOS platform
+- Parser unit tests: `./gradlew :shared:testDebugUnitTest`

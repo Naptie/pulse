@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 private val HR_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
 private val PLX_SERVICE = UUID.fromString("00001822-0000-1000-8000-00805f9b34fb")
@@ -29,18 +30,18 @@ private val PLX_UUID16 = ParcelUuid(UUID.fromString("00001822-0000-1000-8000-008
 
 private var appContext: Context? = null
 
-actual fun createPlatform(engine: PulseEngine): PulsePlatform = AndroidPlatform(engine)
+actual fun createPlatform(engine: PulseEngine): PulsePlatform = AndroidHybridPlatform(engine)
 
 actual fun nowMs(): Long = System.currentTimeMillis()
 
 class AndroidPlatform(private val engine: PulseEngine) : PulsePlatform {
     private val main = Handler(Looper.getMainLooper())
     private val gatts = LinkedHashMap<String, BluetoothGatt>()
-    private val devices = LinkedHashMap<String, DeviceInfo>()
+    internal val devices = ConcurrentHashMap<String, DeviceInfo>()
     private var scanning = false
     private var currentGatt: BluetoothGatt? = null
     private var lastEmitMs = 0L
-
+    internal var reportDevices: ((List<DeviceInfo>) -> Unit)? = null
     override fun initialize(context: Any?) {
         appContext = context as? Context
     }
@@ -96,7 +97,8 @@ class AndroidPlatform(private val engine: PulseEngine) : PulsePlatform {
             val now = System.currentTimeMillis()
             if (now - lastEmitMs >= 3000) {
                 lastEmitMs = now
-                main.post { engine.onDevices(devices.values.toList()) }
+                val snapshot = devices.values.toList()
+                main.post { (reportDevices ?: { engine.onDevices(it) })(snapshot) }
                 android.util.Log.i("PulseScan", "ui emit: ${devices.size} devices")
             }
         }

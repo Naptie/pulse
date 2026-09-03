@@ -4,22 +4,28 @@ import Shared
 final class PulseListenerBridge: NSObject, PulseListener {
     var onDevices: (([DeviceInfo]) -> Void)?
     var onHr: ((Int32) -> Void)?
+    var onSpo2: ((Int32) -> Void)?
     var onState: ((String, String) -> Void)?
     var onHist: (([HrPoint]) -> Void)?
+    var onSpo2Hist: (([Spo2Point]) -> Void)?
 
     func onDevicesChanged(devices: [DeviceInfo]) { onDevices?(devices) }
     func onHeartRate(bpm: Int32) { onHr?(bpm) }
+    func onBloodOxygen(spo2: Int32) { onSpo2?(spo2) }
     func onStateChanged(state: String, detail: String) { onState?(state, detail) }
     func onHistory(history: [HrPoint]) { onHist?(history) }
+    func onSpo2History(history: [Spo2Point]) { onSpo2Hist?(history) }
 }
 
 @MainActor
 final class PulseViewModel: ObservableObject {
     @Published var devices: [DeviceInfo] = []
     @Published var hr: Int = 0
+    @Published var spo2: Int = 0
     @Published var state: String = "idle"
     @Published var detail: String = ""
     @Published var history: [HrPoint] = []
+    @Published var spo2History: [Spo2Point] = []
     @Published var selectedDeviceId: String?
     @Published var lastDeviceName: String = ""
     @Published var alertMessage: String?
@@ -44,6 +50,7 @@ final class PulseViewModel: ObservableObject {
         lastDeviceName = engine.savedDeviceName()
         listener.onDevices = { [weak self] in self?.devices = $0 }
         listener.onHr = { [weak self] in self?.hr = Int($0) }
+        listener.onSpo2 = { [weak self] in self?.spo2 = Int($0) }
         listener.onState = { [weak self] state, detail in
             self?.state = state
             self?.detail = detail
@@ -53,6 +60,7 @@ final class PulseViewModel: ObservableObject {
             }
         }
         listener.onHist = { [weak self] in self?.history = $0 }
+        listener.onSpo2Hist = { [weak self] in self?.spo2History = $0 }
         engine.initialize(context: nil)
     }
 

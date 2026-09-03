@@ -36,10 +36,12 @@ struct DevicesView: View {
     @ObservedObject var vm: PulseViewModel
     @Binding var tab: Int
 
-    /// Heart-rate devices pinned first, then strongest signal first.
+    /// Vitals-capable devices pinned first, then strongest signal first.
     private var sortedDevices: [DeviceInfo] {
         vm.devices.sorted { a, b in
-            if a.hr != b.hr { return a.hr && !b.hr }
+            let av = a.hr || a.spo2
+            let bv = b.hr || b.spo2
+            if av != bv { return av && !bv }
             if a.rssi != b.rssi { return a.rssi > b.rssi }
             return a.name < b.name
         }
@@ -147,13 +149,25 @@ struct DeviceRow: View {
                     .foregroundStyle(.white.opacity(0.5))
                 }
                 Spacer()
-                if device.hr {
-                    Text(UiStrings.shared.hrBadge)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(.pink.opacity(0.28), in: Capsule())
+                if device.hr || device.spo2 {
+                    HStack(spacing: 6) {
+                        if device.hr {
+                            Text(UiStrings.shared.hrBadge)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(.pink.opacity(0.28), in: Capsule())
+                        }
+                        if device.spo2 {
+                            Text(UiStrings.shared.o2Badge)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(.teal.opacity(0.28), in: Capsule())
+                        }
+                    }
                 }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))

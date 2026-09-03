@@ -1,14 +1,26 @@
 package me.naptie.pulse
 
-data class DeviceInfo(val id: String, val name: String, val rssi: Int, val hr: Boolean)
+data class DeviceInfo(
+    val id: String,
+    val name: String,
+    val rssi: Int,
+    val hr: Boolean,
+    val spo2: Boolean = false,
+)
 
 data class HrPoint(val t: Long, val bpm: Int)
+
+data class Spo2Point(val t: Long, val spo2: Int)
+
+data class VitalPoint(val t: Long, val value: Int)
 
 interface PulseListener {
     fun onDevicesChanged(devices: List<DeviceInfo>)
     fun onHeartRate(bpm: Int)
+    fun onBloodOxygen(spo2: Int)
     fun onStateChanged(state: String, detail: String)
     fun onHistory(history: List<HrPoint>)
+    fun onSpo2History(history: List<Spo2Point>)
 }
 
 interface PulsePlatform {
@@ -43,18 +55,49 @@ class HrParser {
     }
 }
 
-/** Per-second heart rate history, capped at [capacity] samples (default 300 = 5 minutes). */
-class HeartHistory(private val capacity: Int = 300) {
-    private val points = ArrayDeque<HrPoint>()
+object PlxParser {
+    private val PLX_SPOT_CHECK = "2A5F"
+    private val PLX_CONTINUOUS = "2A5E"
 
-    fun push(bpm: Int, timeMs: Long) {
+    /** True when the payload belongs to the Pulse Oximeter service (0x1822). */
+    fun owns(uuid16: String): Boolean = uuid16.uppercase() == PLX_SPOT_CHECK || uuid16.uppercase() == PLX_CONTINUOUS
+
+    /**
+     * Parses a Pulse Oximeter payload (2A5E continuous or 2A5F spot check).
+     * Both use the same leading fields: Flags (1 byte), optional SpO2 (IEEE
+     * 11073 16-bit float), optional Pulse Rate (IEEE float). Returns percentage
+     * SpO2 (0-100) or null when the field is absent/invalid.
+     */
+    fun spo2(bytes: ByteArray): Int? {
+        if (bytes.size < 4) return null
+        val flags = bytes[0].toInt() and 0xFF
+        if ((flags and 0x01) == 0) return null
+        val raw = ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF)
+        var mantissa = raw shr 4
+        if (mantissa and 0x800 != 0) mantissa -= 0x1000
+        var exponent = raw and 0x0F
+        if (exponent and 0x08 != 0) exponent -= 0x10
+        var value = mantissa.toLong()
+        repeat(exponent) { value *= 10 }
+        repeat(-exponent) { value /= 10 }
+        return value.toInt().takeIf { it in 0..100 }
+    }
+}
+
+/**
+ * Rolling window of per-second vital samples, capped at [capacity] (default
+ * 300 = 5 minutes). Duplicate samples within the same second are coalesced.
+ */
+class VitalHistory(private val capacity: Int = 300) {
+    private val points = ArrayDeque<VitalPoint>()
+
+    fun push(value: Int, timeMs: Long) {
         val sec = timeMs / 1000
-        val last = points.lastOrNull()
-        if (last != null && sec == last.t / 1000) {
+        if (points.isNotEmpty() && sec == points.last().t / 1000) {
             points.removeLast()
-            points.addLast(HrPoint(sec * 1000, bpm))
+            points.addLast(VitalPoint(sec * 1000, value))
         } else {
-            points.addLast(HrPoint(sec * 1000, bpm))
+            points.addLast(VitalPoint(sec * 1000, value))
         }
         while (points.size > capacity) points.removeFirst()
         if (points.isNotEmpty()) {
@@ -63,7 +106,7 @@ class HeartHistory(private val capacity: Int = 300) {
         }
     }
 
-    fun snapshot(): List<HrPoint> = points.toList()
+    fun snapshot(): List<VitalPoint> = points.toList()
 
     fun clear() {
         points.clear()

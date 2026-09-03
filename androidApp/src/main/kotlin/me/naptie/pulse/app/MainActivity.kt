@@ -35,6 +35,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Search
@@ -89,13 +91,16 @@ import me.naptie.pulse.DeviceInfo
 import me.naptie.pulse.HrPoint
 import me.naptie.pulse.PulseEngine
 import me.naptie.pulse.PulseListener
+import me.naptie.pulse.Spo2Point
 import me.naptie.pulse.UiStrings
+import me.naptie.pulse.VitalPoint
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
 private val Accent = Color(0xFFFF375F)
+private val SpoAccent = Color(0xFF4CC9B0)
 private val BgTop = Color(0xFF0B0B14)
 private val BgBottom = Color(0xFF1B1B35)
 private val CardTint = Color(0xFF161624)
@@ -117,9 +122,11 @@ fun PulseRoot() {
     val context = LocalContext.current
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
     var bpm by remember { mutableIntStateOf(0) }
+    var spo2 by remember { mutableIntStateOf(0) }
     var state by remember { mutableStateOf("idle") }
     var detail by remember { mutableStateOf("") }
     var history by remember { mutableStateOf<List<HrPoint>>(emptyList()) }
+    var spo2History by remember { mutableStateOf<List<Spo2Point>>(emptyList()) }
     var lastDeviceName by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
 
@@ -129,12 +136,14 @@ fun PulseRoot() {
         object : PulseListener {
             override fun onDevicesChanged(newDevices: List<DeviceInfo>) { devices = newDevices }
             override fun onHeartRate(newBpm: Int) { bpm = newBpm }
+            override fun onBloodOxygen(newSpo2: Int) { spo2 = newSpo2 }
             override fun onStateChanged(newState: String, newDetail: String) {
                 state = newState
                 detail = newDetail
                 engineRef?.savedDeviceName()?.takeIf { it.isNotEmpty() }?.let { lastDeviceName = it }
             }
             override fun onHistory(newHistory: List<HrPoint>) { history = newHistory }
+            override fun onSpo2History(newHistory: List<Spo2Point>) { spo2History = newHistory }
         }
     }
 
@@ -207,7 +216,7 @@ fun PulseRoot() {
                 0 -> DevicesScreen(
                     devices = remember(devices) {
                         devices.sortedWith(
-                            compareByDescending<DeviceInfo> { it.hr }
+                             compareByDescending<DeviceInfo> { it.hr || it.spo2 }
                                 .thenByDescending { it.rssi / 3 }
                                 .thenBy { it.id }
                         )
@@ -225,7 +234,8 @@ fun PulseRoot() {
                     }
                 )
                 1 -> MonitorScreen(
-                    bpm = bpm, state = state, detail = detail, history = history,
+                    bpm = bpm, spo2 = spo2, state = state, detail = detail,
+                    history = history, spo2History = spo2History,
                     lastDeviceName = lastDeviceName,
                     onStartLast = { engine.connectLastDevice() },
                     onStop = { engine.disconnect() },
@@ -330,10 +340,21 @@ fun DevicesScreen(
                         Text(d.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                         Text("${d.rssi} ${UiStrings.dbm}", color = Color(0xFF8A90BD), fontSize = 13.sp)
                     }
-                    if (d.hr) {
-                        Surface(color = Accent.copy(alpha = 0.18f), shape = RoundedCornerShape(8.dp)) {
-                            Text(" ${UiStrings.hrBadge} ", color = Accent, fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                    if (d.hr || d.spo2) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (d.hr) {
+                                Surface(color = Accent.copy(alpha = 0.18f), shape = RoundedCornerShape(8.dp)) {
+                                    Text(" ${UiStrings.hrBadge} ", color = Accent, fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                }
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            if (d.spo2) {
+                                Surface(color = SpoAccent.copy(alpha = 0.18f), shape = RoundedCornerShape(8.dp)) {
+                                    Text(" ${UiStrings.o2Badge} ", color = SpoAccent, fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                }
+                            }
                         }
                         Spacer(Modifier.width(8.dp))
                     }
@@ -346,7 +367,8 @@ fun DevicesScreen(
 
 @Composable
 fun MonitorScreen(
-    bpm: Int, state: String, detail: String, history: List<HrPoint>,
+    bpm: Int, spo2: Int, state: String, detail: String,
+    history: List<HrPoint>, spo2History: List<Spo2Point>,
     lastDeviceName: String,
     onStartLast: () -> Unit,
     onStop: () -> Unit,
@@ -368,42 +390,35 @@ fun MonitorScreen(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }
-        Spacer(Modifier.height(28.dp))
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (monitoring) "♥" else "♡", color = if (monitoring) Accent else Color(0xFF4A4F6E), fontSize = 42.sp)
-                Text(if (monitoring) "$bpm" else "—", fontSize = 96.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (monitoring) Color.White else Color.White.copy(alpha = 0.3f))
-                Text(UiStrings.bpm, color = if (monitoring) Color(0xFF8A90BD) else Color(0xFF4A4F6E),
-                    fontSize = 18.sp, letterSpacing = 4.sp)
-            }
-        }
         Spacer(Modifier.height(24.dp))
-        Surface(
-            color = Color(0xFF161624),
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(20.dp)) {
-                Text(UiStrings.last5Minutes, color = Color(0xFF9BA0C8), fontSize = 13.sp)
-                Spacer(Modifier.height(12.dp))
-                if (history.size >= 2) {
-                    HeartChart(history = history, Modifier.fillMaxWidth().height(170.dp))
-                } else {
-                    Box(Modifier.fillMaxWidth().height(170.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            if (monitoring) UiStrings.waitingForData
-                            else if (lastDeviceName.isEmpty()) UiStrings.findYourSensor
-                            else UiStrings.startMeasuringToRecord,
-                            color = Color(0xFF6F7598), fontSize = 14.sp,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-            }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            MetricBlock(
+                title = "♥", value = bpm,
+                unitLabel = UiStrings.bpm, accent = Accent,
+                zone = if (monitoring) hrZone(bpm) else null
+            )
+            Spacer(Modifier.height(22.dp))
+            VitalCard(
+                points = history.map { VitalPoint(it.t, it.bpm) },
+                domain = if (history.isEmpty()) 40f..140f else hrDomain(history),
+                accent = Accent, unit = UiStrings.bpm, unitLabel = " BPM",
+                monitoring = monitoring, lastDeviceName = lastDeviceName
+            )
+            Spacer(Modifier.height(22.dp))
+            MetricBlock(
+                title = "O₂", value = spo2,
+                unitLabel = UiStrings.percent, accent = SpoAccent,
+                zone = if (monitoring) spo2Zone(spo2) else null
+            )
+            Spacer(Modifier.height(22.dp))
+            VitalCard(
+                points = spo2History.map { VitalPoint(it.t, it.spo2) },
+                domain = 80f..100f,
+                accent = SpoAccent, unit = UiStrings.percent, unitLabel = " %",
+                monitoring = monitoring, lastDeviceName = lastDeviceName
+            )
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(16.dp))
         if (monitoring) {
             Button(
                 onClick = onStop,
@@ -433,28 +448,123 @@ fun MonitorScreen(
     }
 }
 
+private fun hrDomain(history: List<HrPoint>): ClosedFloatingPointRange<Float> {
+    val minV = (history.minOf { it.bpm } - 8f).coerceAtLeast(20f)
+    val maxV = (history.maxOf { it.bpm } + 10f).coerceAtMost(220f)
+    return minV..maxV
+}
+
+private fun hrZone(bpm: Int): Pair<String, Color> = when {
+    bpm < 60 -> UiStrings.zoneRest to Color(0xFF73CFFF)
+    bpm < 100 -> UiStrings.zoneNormal to Color(0xFF34C759)
+    bpm < 120 -> UiStrings.zoneElevated to Color(0xFFFF9F0A)
+    bpm < 160 -> UiStrings.zoneExercise to SpoAccent
+    else -> UiStrings.zonePeak to Color(0xFFFF375F)
+}
+
+private fun spo2Zone(spo2: Int): Pair<String, Color> = when {
+    spo2 >= 95 -> UiStrings.zoneNormal to Color(0xFF34C759)
+    spo2 >= 91 -> UiStrings.zoneAttention to Color(0xFFFF9F0A)
+    else -> UiStrings.zoneLow to Color(0xFFFF375F)
+}
+
 @Composable
-fun HeartChart(history: List<HrPoint>, modifier: Modifier = Modifier) {
-    val points = history.filter { it.bpm > 0 }
-    if (points.size < 2) {
+private fun MetricBlock(
+    title: String,
+    value: Int,
+    unitLabel: String,
+    accent: Color,
+    zone: Pair<String, Color>?,
+) {
+    val monitoring = value > 0
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (!monitoring && title == "♥") "♡" else title,
+                color = if (monitoring) accent else Color(0xFF4A4F6E), fontSize = 42.sp
+            )
+            Text(if (monitoring) "$value" else "—", fontSize = 96.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (monitoring) Color.White else Color.White.copy(alpha = 0.3f))
+            Text(unitLabel, color = if (monitoring) Color(0xFF8A90BD) else Color(0xFF4A4F6E),
+                fontSize = 18.sp, letterSpacing = 4.sp)
+            zone?.let { (text, color) ->
+                Spacer(Modifier.height(8.dp))
+                Surface(color = color.copy(alpha = 0.16f), shape = RoundedCornerShape(99.dp)) {
+                    Text(" $text ", color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VitalCard(
+    points: List<VitalPoint>,
+    domain: ClosedFloatingPointRange<Float>,
+    accent: Color,
+    unit: String,
+    unitLabel: String,
+    monitoring: Boolean,
+    lastDeviceName: String,
+) {
+    Surface(
+        color = Color(0xFF161624),
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text(UiStrings.last5Minutes, color = Color(0xFF9BA0C8), fontSize = 13.sp)
+            Spacer(Modifier.height(12.dp))
+            if (points.size >= 2) {
+                VitalChart(
+                    points = points, domain = domain, accent = accent, unit = unit,
+                    modifier = Modifier.fillMaxWidth().height(170.dp)
+                )
+            } else {
+                Box(Modifier.fillMaxWidth().height(170.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (monitoring) UiStrings.waitingForData
+                        else if (lastDeviceName.isEmpty()) UiStrings.findYourSensor
+                        else UiStrings.startMeasuringToRecord,
+                        color = Color(0xFF6F7598), fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VitalChart(
+    points: List<VitalPoint>,
+    domain: ClosedFloatingPointRange<Float>,
+    accent: Color,
+    unit: String,
+    modifier: Modifier = Modifier,
+) {
+    val valid = points.filter { it.value > 0 }
+    if (valid.size < 2) {
         Box(modifier, contentAlignment = Alignment.Center) {
             Text(UiStrings.waitingForData, color = Color(0xFF6F7598))
         }
         return
     }
-    val runs = mutableListOf<MutableList<HrPoint>>()
-    runs.add(mutableListOf(points[0]))
-    for (i in 1 until points.size) {
-        if (points[i].t - points[i - 1].t > 2600) runs.add(mutableListOf())
-        runs.last().add(points[i])
+    val runs = mutableListOf<MutableList<VitalPoint>>()
+    runs.add(mutableListOf(valid[0]))
+    for (i in 1 until valid.size) {
+        if (valid[i].t - valid[i - 1].t > 2600) runs.add(mutableListOf())
+        runs.last().add(valid[i])
     }
-    val minV = (points.minOf { it.bpm } - 8f).coerceAtLeast(20f)
-    val maxV = (points.maxOf { it.bpm } + 10f).coerceAtMost(220f)
-    val t0 = points.minOf { it.t }
-    val span = (points.maxOf { it.t } - t0).coerceAtLeast(1)
+    val minV = domain.start
+    val maxV = domain.endInclusive
+    val t0 = valid.minOf { it.t }
+    val span = (valid.maxOf { it.t } - t0).coerceAtLeast(1)
 
     var canvasW by remember { mutableFloatStateOf(0f) }
-    var cursor by remember { mutableStateOf<HrPoint?>(null) }
+    var cursor by remember { mutableStateOf<VitalPoint?>(null) }
     var lastTouchMs by remember { mutableLongStateOf(0L) }
     val textMeasurer = rememberTextMeasurer()
     val labelStyle = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -465,7 +575,7 @@ fun HeartChart(history: List<HrPoint>, modifier: Modifier = Modifier) {
         textMeasurer.measure("${maxV.roundToInt()}", axisStyle).size.width,
         textMeasurer.measure("${minV.roundToInt()}", axisStyle).size.width
     ) + 10f
-    val pts by rememberUpdatedState(points)
+    val pts by rememberUpdatedState(valid)
     val t0s by rememberUpdatedState(t0)
     val spans by rememberUpdatedState(span)
 
@@ -508,14 +618,14 @@ fun HeartChart(history: List<HrPoint>, modifier: Modifier = Modifier) {
             val h = size.height - labelH
             val plotW = (w - yLabelWx).coerceAtLeast(10f)
         val n = (maxV - minV)
-        fun yOf(bpm: Int) = h - (bpm - minV) / n * h
+        fun yOf(value: Int) = h - (value - minV) / n * h
         fun xOf(t: Long) = (t - t0).toFloat() / span.toFloat() * plotW
 
         for (g in 0..3) {
             val gy = h * g / 3f
             drawLine(Color.White.copy(alpha = 0.06f), Offset(0f, gy), Offset(plotW, gy), 1f)
-            val bpmTick = (maxV - n * g / 3f).roundToInt()
-            val yLayout = textMeasurer.measure("$bpmTick", axisStyle)
+            val tick = (maxV - n * g / 3f).roundToInt()
+            val yLayout = textMeasurer.measure("$tick", axisStyle)
             drawText(
                 yLayout,
                 topLeft = Offset(plotW + 8f, gy - yLayout.size.height / 2f)
@@ -533,7 +643,7 @@ fun HeartChart(history: List<HrPoint>, modifier: Modifier = Modifier) {
             val path = Path()
             run.forEachIndexed { i, p ->
                 val x = xOf(p.t)
-                val y = yOf(p.bpm)
+                val y = yOf(p.value)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
             val lastX = xOf(run.last().t)
@@ -543,23 +653,23 @@ fun HeartChart(history: List<HrPoint>, modifier: Modifier = Modifier) {
                 lineTo(xOf(run.first().t), h)
                 close()
             }
-            drawPath(fill, Brush.verticalGradient(listOf(Accent.copy(alpha = 0.35f), Color.Transparent)))
-            drawPath(path, Accent, style = Stroke(width = 3f))
+            drawPath(fill, Brush.verticalGradient(listOf(accent.copy(alpha = 0.35f), Color.Transparent)))
+            drawPath(path, accent, style = Stroke(width = 3f))
         }
 
         val c = cursor
         if (c != null) {
             val cx = xOf(c.t)
-            val cy = yOf(c.bpm)
+            val cy = yOf(c.value)
             drawLine(
                 Color.White.copy(alpha = 0.55f), Offset(cx, 0f), Offset(cx, h),
                 strokeWidth = 3f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
             )
             drawLine(Color.White.copy(alpha = 0.18f), Offset(0f, cy), Offset(plotW, cy), 1f)
-            drawCircle(Accent, radius = 6f, center = Offset(cx, cy))
+            drawCircle(accent, radius = 6f, center = Offset(cx, cy))
             drawCircle(Color.White, radius = 2.5f, center = Offset(cx, cy))
-            val layout = textMeasurer.measure("${c.bpm} BPM", labelStyle)
+            val layout = textMeasurer.measure("${c.value} $unit", labelStyle)
             val pad = 8f
             val tW = layout.size.width
             val tH = layout.size.height

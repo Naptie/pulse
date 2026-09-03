@@ -11,8 +11,11 @@ class PulseEngine(
     private val listener: PulseListener,
     private val mock: Boolean = false,
 ) {
-    private val histories = LinkedHashMap<String, HeartHistory>(8)
-    private var activeHistory = HeartHistory(300) // 5 minutes at 1s
+    private val histories = LinkedHashMap<String, VitalHistory>(8)
+    private val spo2Histories = LinkedHashMap<String, VitalHistory>(8)
+    private var activeHistory = VitalHistory(300) // 5 minutes at 1s
+    private var activeSpo2History = VitalHistory(300)
+    private var latestSpo2 = 0
     private val platform: PulsePlatform = if (mock) MockPlatform(this) else createPlatform(this)
 
     val isMock: Boolean get() = mock
@@ -34,11 +37,14 @@ class PulseEngine(
     fun stopScan() = platform.stopScan()
 
     fun connect(deviceId: String) {
-        activeHistory = histories.getOrPut(deviceId) { HeartHistory(300) }
+        activeHistory = histories.getOrPut(deviceId) { VitalHistory(300) }
+        activeSpo2History = spo2Histories.getOrPut(deviceId) { VitalHistory(300) }
         if (histories.size > 8) {
             val oldest = histories.keys.first()
             histories.remove(oldest)
+            spo2Histories.remove(oldest)
         }
+        latestSpo2 = 0
         listener.onStateChanged("connecting", "Connecting…")
         platform.connect(deviceId)
     }
@@ -62,13 +68,24 @@ class PulseEngine(
     internal fun onBpm(bpm: Int) {
         activeHistory.push(bpm, nowMs())
         listener.onHeartRate(bpm)
-        listener.onHistory(activeHistory.snapshot())
+        listener.onHistory(activeHistory.snapshot().map { HrPoint(it.t, it.value) })
+    }
+
+    internal fun onSpo2(spo2: Int) {
+        activeSpo2History.push(spo2, nowMs())
+        latestSpo2 = spo2
+        listener.onBloodOxygen(spo2)
+        listener.onSpo2History(activeSpo2History.snapshot().map { Spo2Point(it.t, it.value) })
     }
 
     internal fun onDevices(devices: List<DeviceInfo>) = listener.onDevicesChanged(devices)
     internal fun onState(state: String, detail: String) = listener.onStateChanged(state, detail)
 
-    fun history() = activeHistory.snapshot()
+    fun history() = activeHistory.snapshot().map { HrPoint(it.t, it.value) }
+
+    fun spo2History() = activeSpo2History.snapshot().map { Spo2Point(it.t, it.value) }
+
+    fun spo2Value(): Int = latestSpo2
 
     fun savedDeviceId(): String? = lastDeviceId
 
@@ -81,6 +98,7 @@ internal class MockPlatform(private val engine: PulseEngine) : PulsePlatform {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
     private var bpm = 72
+    private var spo2 = 97
     private var connected = false
     private var savedId: String? = null
     private var savedName: String = ""
@@ -94,7 +112,7 @@ internal class MockPlatform(private val engine: PulseEngine) : PulsePlatform {
     }
 
     private fun mockDevices() = mockNames.mapIndexed { i, n ->
-        DeviceInfo("mock-$i", n, -55 - i * 6, i == 0)
+        DeviceInfo("mock-$i", n, -55 - i * 6, i == 0, i == 0 || i == 2)
     }
 
     override fun startScan() {
@@ -104,7 +122,7 @@ internal class MockPlatform(private val engine: PulseEngine) : PulsePlatform {
             while (true) {
                 delay(1200)
                 engine.onDevices(mockNames.mapIndexed { i, n ->
-                    DeviceInfo("mock-$i", n, -55 - i * 6 + (0..5).random(), i == 0)
+                    DeviceInfo("mock-$i", n, -55 - i * 6 + (0..5).random(), i == 0, i == 0 || i == 2)
                 })
             }
         }
@@ -125,6 +143,9 @@ internal class MockPlatform(private val engine: PulseEngine) : PulsePlatform {
                 val drift = (1..6).random() - 3
                 bpm = (bpm + drift).coerceIn(56, 98)
                 engine.onBpm(bpm)
+                val drift2 = (0..2).random() - 1
+                spo2 = (spo2 + drift2).coerceIn(93, 99)
+                engine.onSpo2(spo2)
             }
         }
     }

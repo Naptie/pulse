@@ -5,96 +5,31 @@ import Shared
 struct MonitorView: View {
     @ObservedObject var vm: PulseViewModel
     @Binding var tab: Int
-    @State private var cursorTime: Date?
-    @State private var cursorPoint: HrPoint?
-    @State private var isTouching = false
-    @State private var dismissDeadline: Date?
-    @State private var dismissWork: DispatchWorkItem?
 
-    private static let CURSOR_LIFETIME: Double = 3.0
-
-    private func clearCursor() {
-        dismissWork?.cancel()
-        dismissWork = nil
-        dismissDeadline = nil
-        withAnimation(.easeOut(duration: 0.3)) {
-            cursorTime = nil
-            cursorPoint = nil
-        }
+    private var hrSamples: [(Date, Int32)] {
+        vm.history.filter { $0.bpm > 0 }
+            .map { (Date(timeIntervalSince1970: Double($0.t) / 1000), $0.bpm) }
     }
 
-    private func armCursorDismiss() {
-        dismissDeadline = Date().addingTimeInterval(Self.CURSOR_LIFETIME)
-        dismissWork?.cancel()
-        let work = DispatchWorkItem { [self] in
-            if isTouching {
-                armCursorDismiss()
-            } else {
-                sweepCursor()
-            }
-        }
-        dismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.CURSOR_LIFETIME + 1.0, execute: work)
+    private var spo2Samples: [(Date, Int32)] {
+        vm.spo2History.filter { $0.spo2 > 0 }
+            .map { (Date(timeIntervalSince1970: Double($0.t) / 1000), $0.spo2) }
     }
 
-    private func sweepCursor() {
-        guard cursorTime != nil, !isTouching else { return }
-        if let d = dismissDeadline, Date() >= d {
-            clearCursor()
-        }
-    }
-
-    private func setCursor(_ date: Date) {
-        cursorTime = date
-        cursorPoint = nearestPoint(to: date)
-        armCursorDismiss()
-    }
-
-    private func nearestPoint(to date: Date) -> HrPoint? {
-        let ms = Int64(date.timeIntervalSince1970 * 1000)
-        return history.min(by: { abs($0.t - ms) < abs($1.t - ms) })
-    }
-
-    private var history: [HrPoint] { vm.history.filter { $0.bpm > 0 } }
-
-    private var domain: ClosedRange<Int32> {
-        let bs = history.map(\.bpm)
+    private var hrDomain: ClosedRange<Int32> {
+        let bs = vm.history.map(\.bpm)
         guard let mn = bs.min(), let mx = bs.max() else { return 40...140 }
         return max(30, mn - 10)...min(230, mx + 12)
     }
 
-    /// Splits history into continuous runs so inactive windows render as blank area.
-    private var segments: [[HrPoint]] {
-        guard !history.isEmpty else { return [] }
-        var result: [[HrPoint]] = []
-        var current: [HrPoint] = [history[0]]
-        for i in 1..<history.count {
-            if history[i].t - history[i - 1].t > 2600 {
-                result.append(current)
-                current = [history[i]]
-            } else {
-                current.append(history[i])
-            }
-        }
-        result.append(current)
-        return result
-    }
-
-    private var xDomain: ClosedRange<Date> {
-        // Adaptive: window starts when monitoring started (capped at 5 min by history).
-        // Time-based x positions keep inactive windows as blank channels between segments.
-        guard history.count >= 2, let first = history.first, let last = history.last else {
-            let now = Date()
-            return now.addingTimeInterval(-10)...now.addingTimeInterval(10)
-        }
-        let from = Date(timeIntervalSince1970: Double(first.t) / 1000)
-        let to = Date(timeIntervalSince1970: Double(last.t) / 1000).addingTimeInterval(2)
-        return from...to
+    private var placeholderText: String {
+        if vm.isMonitoring { return vm.isMock ? UiStrings.shared.simulatingVitals : UiStrings.shared.waitingForData }
+        return vm.lastDeviceName.isEmpty ? UiStrings.shared.findYourSensor : UiStrings.shared.startMeasuringToRecord
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
+            VStack(spacing: 22) {
                 // status pill
                 HStack(spacing: 8) {
                     Circle()
@@ -146,41 +81,48 @@ struct MonitorView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
 
-                // history card
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text(UiStrings.shared.last5Minutes)
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .tracking(2)
-                            .foregroundStyle(.white.opacity(0.55))
-                        Spacer()
-                        if vm.isMonitoring {
-                            Text("1s · \(history.count) pts")
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.35))
-                        }
-                    }
-                    if history.count >= 2 {
-                        chart
-                            .frame(height: 200)
-                    } else {
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform.path.ecg")
-                                .font(.system(size: 34))
-                                .foregroundStyle(.white.opacity(0.22))
-                            Text(vm.isMonitoring
-                                 ? (vm.isMock ? UiStrings.shared.simulatingVitals : UiStrings.shared.waitingForData)
-                                 : (vm.lastDeviceName.isEmpty ? UiStrings.shared.findYourSensor : UiStrings.shared.startMeasuringToRecord))
-                                .font(.system(size: 14, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.4))
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 200)
+                // history card: heart rate
+                VitalChartCard(
+                    samples: hrSamples,
+                    domain: hrDomain,
+                    color: .pink,
+                    unit: UiStrings.shared.bpm,
+                    placeholder: placeholderText,
+                    monitoring: vm.isMonitoring,
+                    autoCursorTest: true
+                )
+
+                // big blood oxygen
+                VStack(spacing: 2) {
+                    Text("O₂")
+                        .font(.system(size: 52, weight: .semibold, design: .rounded))
+                        .foregroundStyle(vm.isMonitoring ? spo2Color : .white.opacity(0.22))
+                    Text(vm.isMonitoring ? "\(vm.spo2)" : "—")
+                        .font(.system(size: 104, weight: .bold, design: .rounded))
+                        .foregroundStyle(vm.isMonitoring ? .white : .white.opacity(0.30))
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.35), value: vm.spo2)
+                    Text(UiStrings.shared.percent)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .tracking(8)
+                        .foregroundStyle(vm.isMonitoring ? .white.opacity(0.45) : .white.opacity(0.25))
+                    if vm.isMonitoring {
+                        spo2ZoneLabel(vm.spo2)
                     }
                 }
-                .padding(18)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+
+                // history card: blood oxygen
+                VitalChartCard(
+                    samples: spo2Samples,
+                    domain: 80...100,
+                    color: spo2Color,
+                    unit: UiStrings.shared.percent,
+                    placeholder: placeholderText,
+                    monitoring: vm.isMonitoring,
+                    autoCursorTest: false
+                )
 
                 // primary action
                 if vm.isMonitoring {
@@ -240,7 +182,171 @@ struct MonitorView: View {
             : UiStrings.shared.nameNotMeasuring(name: vm.lastDeviceName)
     }
 
+    private var spo2Color: Color {
+        Color(red: 0.30, green: 0.79, blue: 0.69)
+    }
+
     @ViewBuilder
+    private func zoneLabel(_ bpm: Int) -> some View {
+        let (text, color) = zone(bpm)
+        Text(text)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.16), in: Capsule())
+            .padding(.top, 8)
+    }
+
+    private func zone(_ bpm: Int) -> (String, Color) {
+        if bpm <= 0 { return ("—", .white.opacity(0.4)) }
+        switch bpm {
+        case ..<60: return (UiStrings.shared.zoneRest, Color(red: 0.45, green: 0.80, blue: 1.0))
+        case 60..<100: return (UiStrings.shared.zoneNormal, .green.opacity(0.9))
+        case 100..<120: return (UiStrings.shared.zoneElevated, .orange)
+        case 120..<160: return (UiStrings.shared.zoneExercise, spo2Color)
+        default: return (UiStrings.shared.zonePeak, .red)
+        }
+    }
+
+    @ViewBuilder
+    private func spo2ZoneLabel(_ spo2: Int) -> some View {
+        let (text, color) = spo2Zone(spo2)
+        Text(text)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.16), in: Capsule())
+            .padding(.top, 8)
+    }
+
+    private func spo2Zone(_ spo2: Int) -> (String, Color) {
+        switch spo2 {
+        case 95...: return (UiStrings.shared.zoneNormal, .green.opacity(0.9))
+        case 91...94: return (UiStrings.shared.zoneAttention, .orange)
+        default: return (UiStrings.shared.zoneLow, .red)
+        }
+    }
+}
+
+struct VitalChartCard: View {
+    let samples: [(Date, Int32)]
+    let domain: ClosedRange<Int32>
+    let color: Color
+    let unit: String
+    let placeholder: String
+    let monitoring: Bool
+    let autoCursorTest: Bool
+
+    @State private var cursorTime: Date?
+    @State private var cursorPoint: (Date, Int32)?
+    @State private var isTouching = false
+    @State private var dismissDeadline: Date?
+    @State private var dismissWork: DispatchWorkItem?
+
+    private static let CURSOR_LIFETIME: Double = 3.0
+
+    private func clearCursor() {
+        dismissWork?.cancel()
+        dismissWork = nil
+        dismissDeadline = nil
+        withAnimation(.easeOut(duration: 0.3)) {
+            cursorTime = nil
+            cursorPoint = nil
+        }
+    }
+
+    private func armCursorDismiss() {
+        dismissDeadline = Date().addingTimeInterval(Self.CURSOR_LIFETIME)
+        dismissWork?.cancel()
+        let work = DispatchWorkItem { [self] in
+            if isTouching {
+                armCursorDismiss()
+            } else {
+                sweepCursor()
+            }
+        }
+        dismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.CURSOR_LIFETIME + 1.0, execute: work)
+    }
+
+    private func sweepCursor() {
+        guard cursorTime != nil, !isTouching else { return }
+        if let d = dismissDeadline, Date() >= d {
+            clearCursor()
+        }
+    }
+
+    private func setCursor(_ date: Date) {
+        cursorTime = date
+        cursorPoint = nearestPoint(to: date)
+        armCursorDismiss()
+    }
+
+    private func nearestPoint(to date: Date) -> (Date, Int32)? {
+        samples.min(by: { abs($0.0.timeIntervalSince1970 - date.timeIntervalSince1970) < abs($1.0.timeIntervalSince1970 - date.timeIntervalSince1970) })
+    }
+
+    private var segments: [[(Date, Int32)]] {
+        guard !samples.isEmpty else { return [] }
+        var result: [[(Date, Int32)]] = []
+        var current: [(Date, Int32)] = [samples[0]]
+        for i in 1..<samples.count {
+            if samples[i].0.timeIntervalSince1970 - samples[i - 1].0.timeIntervalSince1970 > 2.6 {
+                result.append(current)
+                current = [samples[i]]
+            } else {
+                current.append(samples[i])
+            }
+        }
+        result.append(current)
+        return result
+    }
+
+    private var xDomain: ClosedRange<Date> {
+        guard samples.count >= 2, let first = samples.first, let last = samples.last else {
+            let now = Date()
+            return now.addingTimeInterval(-10)...now.addingTimeInterval(10)
+        }
+        return first.0...last.0.addingTimeInterval(2)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(UiStrings.shared.last5Minutes)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .tracking(2)
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                if monitoring {
+                    Text("1s · \(samples.count) pts")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+            }
+            if samples.count >= 2 {
+                chart
+                    .frame(height: 200)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 34))
+                        .foregroundStyle(.white.opacity(0.22))
+                    Text(placeholder)
+                        .font(.system(size: 14, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 200)
+            }
+        }
+        .padding(18)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28))
+    }
+
     private var chart: some View {
         Chart {
             chartMarks
@@ -258,9 +364,9 @@ struct MonitorView: View {
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine().foregroundStyle(.white.opacity(0.05))
-                if let bpm = value.as(Int.self) {
+                if let v = value.as(Int.self) {
                     AxisValueLabel {
-                        Text("\(bpm)")
+                        Text("\(v)")
                             .font(.system(size: 10, design: .rounded))
                             .foregroundStyle(.white.opacity(0.4))
                     }
@@ -286,14 +392,15 @@ struct MonitorView: View {
                 dismissWork = nil
             }
         }
-        .onChange(of: vm.history.count) { _, _ in
+        .onChange(of: samples.count) { _, _ in
             sweepCursor()
             if let ct = cursorTime {
                 cursorPoint = nearestPoint(to: ct)
             }
         }
         .task {
-            guard ProcessInfo.processInfo.environment["PULSE_CURSOR_TEST"] == "1" else { return }
+            guard autoCursorTest,
+                  ProcessInfo.processInfo.environment["PULSE_CURSOR_TEST"] == "1" else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             setCursor(Date())
         }
@@ -302,32 +409,26 @@ struct MonitorView: View {
     @ChartContentBuilder
     private var chartMarks: some ChartContent {
         let lo = domain.lowerBound
-        ForEach(segments, id: \.first!.t) { seg in
-            ForEach(seg, id: \.t) { pt in
-                let date = Date(timeIntervalSince1970: Double(pt.t) / 1000)
+        ForEach(segments, id: \.first!.0) { seg in
+            ForEach(seg, id: \.0) { pt in
                 AreaMark(
-                    x: .value("Time", date),
+                    x: .value("Time", pt.0),
                     yStart: .value("Base", lo),
-                    yEnd: .value("BPM", pt.bpm)
+                    yEnd: .value("Vital", pt.1)
                 )
                 .interpolationMethod(.catmullRom)
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.pink.opacity(0.45), .pink.opacity(0.06)],
+                        colors: [color.opacity(0.45), color.opacity(0.06)],
                         startPoint: .top, endPoint: .bottom
                     )
                 )
                 LineMark(
-                    x: .value("Time", date),
-                    y: .value("BPM", pt.bpm)
+                    x: .value("Time", pt.0),
+                    y: .value("Vital", pt.1)
                 )
                 .interpolationMethod(.catmullRom)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color(red: 1.0, green: 0.38, blue: 0.50), .pink.opacity(0.80)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
+                .foregroundStyle(color)
                 .lineStyle(StrokeStyle(lineWidth: 2.6, lineCap: .round))
             }
         }
@@ -364,7 +465,7 @@ struct MonitorView: View {
             let t1 = s1.timeIntervalSince1970
             let t = ct.timeIntervalSince1970
             let xFrac = (t - t0) / (t1 - t0)
-            let yFrac = (Double(cp.bpm) - lo) / (hi - lo)
+            let yFrac = (Double(cp.1) - lo) / (hi - lo)
             let w = CGFloat(pf.width)
             let h = CGFloat(pf.height)
             let x = CGFloat(xFrac) * w + pf.minX
@@ -391,11 +492,11 @@ struct MonitorView: View {
                 .position(x: pf.minX + w / 2, y: y)
 
                 Circle()
-                    .fill(.pink)
+                    .fill(color)
                     .frame(width: 9, height: 9)
                     .position(x: x, y: y)
 
-                Text("\(cp.bpm) \(UiStrings.shared.bpm)")
+                Text("\(cp.1) \(unit)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -405,29 +506,6 @@ struct MonitorView: View {
             }
             .transition(.opacity)
             .frame(width: CGFloat(full.width), height: CGFloat(full.height))
-        }
-    }
-
-    @ViewBuilder
-    private func zoneLabel(_ bpm: Int) -> some View {
-        let (text, color) = zone(bpm)
-        Text(text)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(color)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(color.opacity(0.16), in: Capsule())
-            .padding(.top, 8)
-    }
-
-    private func zone(_ bpm: Int) -> (String, Color) {
-        if bpm <= 0 { return ("—", .white.opacity(0.4)) }
-        switch bpm {
-        case ..<60: return ("Rest", Color(red: 0.45, green: 0.80, blue: 1.0))
-        case 60..<100: return ("Normal", .green.opacity(0.9))
-        case 100..<120: return ("Elevated", .orange)
-        case 120..<160: return ("Exercise", .pink)
-        default: return ("Peak", .red)
         }
     }
 }
@@ -451,5 +529,3 @@ struct HeartPulse: View {
             .frame(height: 64)
     }
 }
-
-

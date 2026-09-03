@@ -27,7 +27,10 @@ private const val USERDEFAULTS_ID_KEY = "pulse.lastDeviceId"
 private const val USERDEFAULTS_NAME_KEY = "pulse.lastDeviceName"
 
 private val HR_SERVICE = "180D"
+private val PLX_SERVICE = "1822"
 private val HR_MEASURE = "2A37"
+private val PLX_SPOT = "2A5F"
+private val PLX_CONT = "2A5E"
 private val CCCD = "2902"
 
 actual fun createPlatform(engine: PulseEngine): PulsePlatform = IosPlatform(engine)
@@ -120,13 +123,17 @@ class IosPlatform(private val engine: PulseEngine) : PulsePlatform {
             (it as? CBUUID)?.UUIDString?.uppercase()?.startsWith(HR_SERVICE) == true
         } == true || (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? CBUUID)
             ?.UUIDString?.uppercase()?.startsWith(HR_SERVICE) == true
+        val spo2 = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? List<*>)?.any {
+            (it as? CBUUID)?.UUIDString?.uppercase()?.startsWith(PLX_SERVICE) == true
+        } == true || (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? CBUUID)
+            ?.UUIDString?.uppercase()?.startsWith(PLX_SERVICE) == true
         peripherals[id] = peripheral
-        devices[id] = DeviceInfo(id, name, rssi.intValue, hr)
+        devices[id] = DeviceInfo(id, name, rssi.intValue, hr, spo2)
         fireDevices()
     }
 
     internal fun connected(p: CBPeripheral) {
-        p.discoverServices(listOf(CBUUID.UUIDWithString(HR_SERVICE)))
+        p.discoverServices(listOf(CBUUID.UUIDWithString(HR_SERVICE), CBUUID.UUIDWithString(PLX_SERVICE)))
         val name = p.name ?: p.identifier?.UUIDString?.take(8) ?: "device"
         currentName = name
         p.identifier?.UUIDString?.let { engine.rememberLastDevice(it, name) }
@@ -139,21 +146,41 @@ class IosPlatform(private val engine: PulseEngine) : PulsePlatform {
 
     internal fun peripheralDiscovered(peripheral: CBPeripheral) {
         val svc = peripheral.services?.filterIsInstance<CBService>()
-            ?.firstOrNull { it.UUID.UUIDString == HR_SERVICE } ?: return
-        peripheral.discoverCharacteristics(listOf(CBUUID.UUIDWithString(HR_MEASURE)), svc)
+            ?.firstOrNull { it.UUID.UUIDString == HR_SERVICE || it.UUID.UUIDString == PLX_SERVICE } ?: return
+        if (svc.UUID.UUIDString == HR_SERVICE) {
+            peripheral.discoverCharacteristics(listOf(CBUUID.UUIDWithString(HR_MEASURE)), svc)
+        } else {
+            peripheral.discoverCharacteristics(
+                listOf(CBUUID.UUIDWithString(PLX_CONT), CBUUID.UUIDWithString(PLX_SPOT)), svc
+            )
+        }
     }
 
     internal fun characteristicsFound(peripheral: CBPeripheral, service: CBService) {
-        val ch = service.characteristics?.filterIsInstance<CBCharacteristic>()
-            ?.firstOrNull { it.UUID.UUIDString == HR_MEASURE } ?: return
-        peripheral.setNotifyValue(true, forCharacteristic = ch)
+        val chars = service.characteristics?.filterIsInstance<CBCharacteristic>() ?: emptyList()
+        val target = when (service.UUID.UUIDString) {
+            HR_SERVICE -> chars.firstOrNull { it.UUID.UUIDString == HR_MEASURE }
+            PLX_SERVICE -> chars.firstOrNull { it.UUID.UUIDString == PLX_CONT }
+                ?: chars.firstOrNull { it.UUID.UUIDString == PLX_SPOT }
+            else -> null
+        } ?: return
+        peripheral.setNotifyValue(true, forCharacteristic = target)
         val name = currentName.ifEmpty { peripheral.name ?: "device" }
         engine.onState("connected", "Connected · $name")
     }
 
     internal fun valueUpdated(characteristic: CBCharacteristic) {
         val data = characteristic.value ?: return
-        engine.onBpm(HrParser.bpm(data.toByteArray()))
+        when (characteristic.UUID.UUIDString) {
+            HR_MEASURE -> {
+                val bpm = HrParser.bpm(data.toByteArray())
+                if (bpm > 0) engine.onBpm(bpm)
+            }
+            PLX_CONT, PLX_SPOT -> {
+                PlxParser.spo2(data.toByteArray())?.let { engine.onSpo2(it) }
+            }
+            else -> Unit
+        }
     }
 }
 

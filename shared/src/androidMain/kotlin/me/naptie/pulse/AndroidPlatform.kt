@@ -19,9 +19,13 @@ import android.os.ParcelUuid
 import java.util.UUID
 
 private val HR_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
+private val PLX_SERVICE = UUID.fromString("00001822-0000-1000-8000-00805f9b34fb")
 private val HR_MEASURE = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
+private val PLX_SPOT = UUID.fromString("00002a5f-0000-1000-8000-00805f9b34fb")
+private val PLX_CONT = UUID.fromString("00002a5e-0000-1000-8000-00805f9b34fb")
 private val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 private val HR_UUID16 = ParcelUuid(UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb"))
+private val PLX_UUID16 = ParcelUuid(UUID.fromString("00001822-0000-1000-8000-00805f9b34fb"))
 
 private var appContext: Context? = null
 
@@ -85,8 +89,10 @@ class AndroidPlatform(private val engine: PulseEngine) : PulsePlatform {
             if (id.isEmpty()) return
             val hr = result.scanRecord?.serviceUuids?.contains(HR_UUID16) == true ||
                     result.scanRecord?.serviceData?.keys?.any { it.uuid.toString().lowercase().startsWith("0000180d") } == true
-            android.util.Log.i("PulseScan", "onScanResult: ${id} rssi=${result.rssi} name=$name hr=$hr")
-            devices[id] = DeviceInfo(id, name.ifEmpty { UiStrings.unnamedDevice }, result.rssi, hr)
+            val spo2 = result.scanRecord?.serviceUuids?.contains(PLX_UUID16) == true ||
+                    result.scanRecord?.serviceData?.keys?.any { it.uuid.toString().lowercase().startsWith("00001822") } == true
+            android.util.Log.i("PulseScan", "onScanResult: ${id} rssi=${result.rssi} name=$name hr=$hr spo2=$spo2")
+            devices[id] = DeviceInfo(id, name.ifEmpty { UiStrings.unnamedDevice }, result.rssi, hr, spo2)
             val now = System.currentTimeMillis()
             if (now - lastEmitMs >= 3000) {
                 lastEmitMs = now
@@ -122,20 +128,34 @@ class AndroidPlatform(private val engine: PulseEngine) : PulsePlatform {
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val svc = gatt.getService(HR_SERVICE) ?: run {
+            val hr = gatt.getService(HR_SERVICE)
+            val plx = gatt.getService(PLX_SERVICE)
+            if (hr == null && plx == null) {
                 engine.onState("failed", UiStrings.monitorServiceNotFound)
                 gatt.close()
                 return
             }
-            val ch = svc.getCharacteristic(HR_MEASURE) ?: return
-            gatt.setCharacteristicNotification(ch, true)
-            val cccd = ch.getDescriptor(CCCD)
-            if (cccd != null) {
-                cccd.value = byteArrayOf(0x01, 0x00)
-                gatt.writeDescriptor(cccd)
-            } else {
-                engine.onState("connected", UiStrings.connected)
+            var found = false
+            hr?.getCharacteristic(HR_MEASURE)?.let { ch ->
+                gatt.setCharacteristicNotification(ch, true)
+                val cccd = ch.getDescriptor(CCCD)
+                if (cccd != null) {
+                    cccd.value = byteArrayOf(0x01, 0x00)
+                    gatt.writeDescriptor(cccd)
+                    found = true
+                }
             }
+            val plxCh = plx?.getCharacteristic(PLX_CONT) ?: plx?.getCharacteristic(PLX_SPOT)
+            plxCh?.let { ch ->
+                gatt.setCharacteristicNotification(ch, true)
+                val cccd = ch.getDescriptor(CCCD)
+                if (cccd != null) {
+                    cccd.value = byteArrayOf(0x01, 0x00)
+                    gatt.writeDescriptor(cccd)
+                    found = true
+                }
+            }
+            if (!found) engine.onState("connected", UiStrings.connected)
         }
 
         @SuppressLint("MissingPermission")
@@ -151,9 +171,17 @@ class AndroidPlatform(private val engine: PulseEngine) : PulsePlatform {
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic
         ) {
-            characteristic.value?.let {
-                val bpm = HrParser.bpm(it)
-                if (bpm > 0) engine.onBpm(bpm)
+            characteristic.value ?: return
+            characteristic.value.let { data ->
+                when (characteristic.uuid) {
+                    HR_MEASURE -> {
+                        val bpm = HrParser.bpm(data)
+                        if (bpm > 0) engine.onBpm(bpm)
+                    }
+                    PLX_CONT, PLX_SPOT -> {
+                        PlxParser.spo2(data)?.let { engine.onSpo2(it) }
+                    }
+                }
             }
         }
 

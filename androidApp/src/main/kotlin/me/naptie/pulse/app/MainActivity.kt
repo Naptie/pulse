@@ -199,8 +199,15 @@ fun PulseRoot() {
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
-                    icon = { Icon(Icons.Default.Favorite, contentDescription = UiStrings.tabVitals) },
-                    label = { Text(UiStrings.tabVitals, fontSize = 12.sp) },
+                    icon = { Icon(Icons.Default.Favorite, contentDescription = UiStrings.tabHeartRate) },
+                    label = { Text(UiStrings.tabHeartRate, fontSize = 12.sp) },
+                    colors = navColors()
+                )
+                NavigationBarItem(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    icon = { Text("O₂", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (tab == 2) SpoAccent else Color(0xFF8A90BD)) },
+                    label = { Text(UiStrings.tabBloodOxygen, fontSize = 12.sp) },
                     colors = navColors()
                 )
             }
@@ -216,7 +223,7 @@ fun PulseRoot() {
                 0 -> DevicesScreen(
                     devices = remember(devices) {
                         devices.sortedWith(
-                             compareByDescending<DeviceInfo> { it.hr || it.spo2 }
+                            compareByDescending<DeviceInfo> { it.hr || it.spo2 }
                                 .thenByDescending { it.rssi / 3 }
                                 .thenBy { it.id }
                         )
@@ -233,10 +240,16 @@ fun PulseRoot() {
                         tab = 1
                     }
                 )
-                1 -> MonitorScreen(
-                    bpm = bpm, spo2 = spo2, state = state, detail = detail,
-                    history = history, spo2History = spo2History,
+                1 -> HeartRateScreen(
+                    bpm = bpm, state = state, detail = detail, history = history,
                     lastDeviceName = lastDeviceName,
+                    onStartLast = { engine.connectLastDevice() },
+                    onStop = { engine.disconnect() },
+                    onFindDevice = { tab = 0 }
+                )
+                2 -> BloodOxygenScreen(
+                    spo2 = spo2, state = state, detail = detail,
+                    spo2History = spo2History, lastDeviceName = lastDeviceName,
                     onStartLast = { engine.connectLastDevice() },
                     onStop = { engine.disconnect() },
                     onFindDevice = { tab = 0 }
@@ -366,15 +379,65 @@ fun DevicesScreen(
 }
 
 @Composable
-fun MonitorScreen(
-    bpm: Int, spo2: Int, state: String, detail: String,
-    history: List<HrPoint>, spo2History: List<Spo2Point>,
+fun HeartRateScreen(
+    bpm: Int, state: String, detail: String, history: List<HrPoint>,
     lastDeviceName: String,
+    onStartLast: () -> Unit, onStop: () -> Unit, onFindDevice: () -> Unit,
+) {
+    MonitorPage(
+        detail = detail, lastDeviceName = lastDeviceName,
+        monitoring = state == "connected" || state == "connecting",
+        metric = {
+            MetricBlock(
+                title = "♥", value = bpm,
+                unitLabel = UiStrings.bpm, accent = Accent,
+                zone = if (bpm > 0) hrZone(bpm) else null
+            )
+        },
+        points = history.map { VitalPoint(it.t, it.bpm) },
+        domain = if (history.isEmpty()) 40f..140f else hrDomain(history),
+        accent = Accent, unit = UiStrings.bpm,
+        onStartLast = onStartLast, onStop = onStop, onFindDevice = onFindDevice
+    )
+}
+
+@Composable
+fun BloodOxygenScreen(
+    spo2: Int, state: String, detail: String, spo2History: List<Spo2Point>,
+    lastDeviceName: String,
+    onStartLast: () -> Unit, onStop: () -> Unit, onFindDevice: () -> Unit,
+) {
+    MonitorPage(
+        detail = detail, lastDeviceName = lastDeviceName,
+        monitoring = state == "connected" || state == "connecting",
+        metric = {
+            MetricBlock(
+                title = "O₂", value = spo2,
+                unitLabel = UiStrings.percent, accent = SpoAccent,
+                zone = if (spo2 > 0) spo2Zone(spo2) else null
+            )
+        },
+        points = spo2History.map { VitalPoint(it.t, it.spo2) },
+        domain = 80f..100f,
+        accent = SpoAccent, unit = UiStrings.percent,
+        onStartLast = onStartLast, onStop = onStop, onFindDevice = onFindDevice
+    )
+}
+
+@Composable
+private fun MonitorPage(
+    detail: String,
+    lastDeviceName: String,
+    monitoring: Boolean,
+    metric: @Composable () -> Unit,
+    points: List<VitalPoint>,
+    domain: ClosedFloatingPointRange<Float>,
+    accent: Color,
+    unit: String,
     onStartLast: () -> Unit,
     onStop: () -> Unit,
     onFindDevice: () -> Unit,
 ) {
-    val monitoring = state == "connected" || state == "connecting"
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(20.dp))
         Surface(
@@ -392,29 +455,11 @@ fun MonitorScreen(
         }
         Spacer(Modifier.height(24.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            MetricBlock(
-                title = "♥", value = bpm,
-                unitLabel = UiStrings.bpm, accent = Accent,
-                zone = if (monitoring) hrZone(bpm) else null
-            )
+            metric()
             Spacer(Modifier.height(22.dp))
             VitalCard(
-                points = history.map { VitalPoint(it.t, it.bpm) },
-                domain = if (history.isEmpty()) 40f..140f else hrDomain(history),
-                accent = Accent, unit = UiStrings.bpm, unitLabel = " BPM",
-                monitoring = monitoring, lastDeviceName = lastDeviceName
-            )
-            Spacer(Modifier.height(22.dp))
-            MetricBlock(
-                title = "O₂", value = spo2,
-                unitLabel = UiStrings.percent, accent = SpoAccent,
-                zone = if (monitoring) spo2Zone(spo2) else null
-            )
-            Spacer(Modifier.height(22.dp))
-            VitalCard(
-                points = spo2History.map { VitalPoint(it.t, it.spo2) },
-                domain = 80f..100f,
-                accent = SpoAccent, unit = UiStrings.percent, unitLabel = " %",
+                points = points, domain = domain,
+                accent = accent, unit = unit,
                 monitoring = monitoring, lastDeviceName = lastDeviceName
             )
         }
@@ -476,19 +521,19 @@ private fun MetricBlock(
     accent: Color,
     zone: Pair<String, Color>?,
 ) {
-    val monitoring = value > 0
+    val ready = value > 0
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                if (!monitoring && title == "♥") "♡" else title,
-                color = if (monitoring) accent else Color(0xFF4A4F6E), fontSize = 42.sp
+                if (!ready && title == "♥") "♡" else title,
+                color = if (ready) accent else Color(0xFF4A4F6E), fontSize = 42.sp
             )
-            Text(if (monitoring) "$value" else "—", fontSize = 96.sp,
+            Text(if (ready) "$value" else "—", fontSize = 96.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (monitoring) Color.White else Color.White.copy(alpha = 0.3f))
-            Text(unitLabel, color = if (monitoring) Color(0xFF8A90BD) else Color(0xFF4A4F6E),
+                color = if (ready) Color.White else Color.White.copy(alpha = 0.3f))
+            Text(unitLabel, color = if (ready) Color(0xFF8A90BD) else Color(0xFF4A4F6E),
                 fontSize = 18.sp, letterSpacing = 4.sp)
-            zone?.let { (text, color) ->
+            if (ready) zone?.let { (text, color) ->
                 Spacer(Modifier.height(8.dp))
                 Surface(color = color.copy(alpha = 0.16f), shape = RoundedCornerShape(99.dp)) {
                     Text(" $text ", color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
@@ -505,7 +550,6 @@ private fun VitalCard(
     domain: ClosedFloatingPointRange<Float>,
     accent: Color,
     unit: String,
-    unitLabel: String,
     monitoring: Boolean,
     lastDeviceName: String,
 ) {

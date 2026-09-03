@@ -2,9 +2,35 @@ import SwiftUI
 import Charts
 import Shared
 
-struct MonitorView: View {
+enum VitalKind {
+    case heartRate
+    case bloodOxygen
+}
+
+struct HeartRateView: View {
     @ObservedObject var vm: PulseViewModel
     @Binding var tab: Int
+
+    var body: some View {
+        VitalPageView(vm: vm, tab: $tab, kind: .heartRate)
+    }
+}
+
+struct BloodOxygenView: View {
+    @ObservedObject var vm: PulseViewModel
+    @Binding var tab: Int
+
+    var body: some View {
+        VitalPageView(vm: vm, tab: $tab, kind: .bloodOxygen)
+    }
+}
+
+struct VitalPageView: View {
+    @ObservedObject var vm: PulseViewModel
+    @Binding var tab: Int
+    let kind: VitalKind
+
+    private var isHeart: Bool { kind == .heartRate }
 
     private var hrSamples: [(Date, Int32)] {
         vm.history.filter { $0.bpm > 0 }
@@ -27,6 +53,10 @@ struct MonitorView: View {
         return vm.lastDeviceName.isEmpty ? UiStrings.shared.findYourSensor : UiStrings.shared.startMeasuringToRecord
     }
 
+    private var spo2Color: Color {
+        Color(red: 0.30, green: 0.79, blue: 0.69)
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
@@ -46,82 +76,16 @@ struct MonitorView: View {
                 .glassEffect(.regular, in: Capsule())
                 .padding(.top, 18)
 
-                // big heart rate
-                VStack(spacing: 2) {
-                    if vm.isMonitoring {
-                        HeartPulse(bpm: vm.hr)
-                        Text("\(vm.hr)")
-                            .font(.system(size: 104, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .contentTransition(.numericText())
-                            .animation(.snappy(duration: 0.35), value: vm.hr)
-                        Text(UiStrings.shared.bpm)
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .tracking(8)
-                            .foregroundStyle(.white.opacity(0.45))
-                        zoneLabel(vm.hr)
-                    } else {
-                        HeartPulse(bpm: 0)
-                        Text("—")
-                            .font(.system(size: 104, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.30))
-                        Text(UiStrings.shared.bpm)
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .tracking(8)
-                            .foregroundStyle(.white.opacity(0.25))
-                        Text(vm.lastDeviceName.isEmpty ? UiStrings.shared.noDeviceYet : UiStrings.shared.tapStartToMeasure)
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(.white.opacity(0.08), in: Capsule())
-                            .padding(.top, 8)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                bigMetric
 
-                // history card: heart rate
                 VitalChartCard(
-                    samples: hrSamples,
-                    domain: hrDomain,
-                    color: .pink,
-                    unit: UiStrings.shared.bpm,
+                    samples: samples,
+                    domain: domain,
+                    color: accent,
+                    unit: unitText,
                     placeholder: placeholderText,
                     monitoring: vm.isMonitoring,
-                    autoCursorTest: true
-                )
-
-                // big blood oxygen
-                VStack(spacing: 2) {
-                    Text("O₂")
-                        .font(.system(size: 52, weight: .semibold, design: .rounded))
-                        .foregroundStyle(vm.isMonitoring ? spo2Color : .white.opacity(0.22))
-                    Text(vm.isMonitoring ? "\(vm.spo2)" : "—")
-                        .font(.system(size: 104, weight: .bold, design: .rounded))
-                        .foregroundStyle(vm.isMonitoring ? .white : .white.opacity(0.30))
-                        .contentTransition(.numericText())
-                        .animation(.snappy(duration: 0.35), value: vm.spo2)
-                    Text(UiStrings.shared.percent)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .tracking(8)
-                        .foregroundStyle(vm.isMonitoring ? .white.opacity(0.45) : .white.opacity(0.25))
-                    if vm.isMonitoring {
-                        spo2ZoneLabel(vm.spo2)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-
-                // history card: blood oxygen
-                VitalChartCard(
-                    samples: spo2Samples,
-                    domain: 80...100,
-                    color: spo2Color,
-                    unit: UiStrings.shared.percent,
-                    placeholder: placeholderText,
-                    monitoring: vm.isMonitoring,
-                    autoCursorTest: false
+                    autoCursorTest: isHeart
                 )
 
                 // primary action
@@ -175,15 +139,73 @@ struct MonitorView: View {
         }
     }
 
+    private var samples: [(Date, Int32)] { isHeart ? hrSamples : spo2Samples }
+    private var domain: ClosedRange<Int32> { isHeart ? hrDomain : 80...100 }
+    private var accent: Color { isHeart ? .pink : spo2Color }
+    private var unitText: String {
+        isHeart ? UiStrings.shared.bpm : UiStrings.shared.percent
+    }
+
+    @ViewBuilder
+    private var bigMetric: some View {
+        VStack(spacing: 2) {
+            if isHeart {
+                HeartPulse(bpm: vm.isMonitoring && vm.hr > 0 ? vm.hr : 0)
+                Text(vm.hr > 0 ? "\(vm.hr)" : "—")
+                    .font(.system(size: 104, weight: .bold, design: .rounded))
+                    .foregroundStyle(vm.hr > 0 ? .white : .white.opacity(0.30))
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.35), value: vm.hr)
+                Text(UiStrings.shared.bpm)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .tracking(8)
+                    .foregroundStyle(vm.hr > 0 ? .white.opacity(0.45) : .white.opacity(0.25))
+                if vm.hr > 0 {
+                    zoneLabel(vm.hr)
+                } else if !vm.isMonitoring {
+                    Text(vm.lastDeviceName.isEmpty ? UiStrings.shared.noDeviceYet : UiStrings.shared.tapStartToMeasure)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.white.opacity(0.08), in: Capsule())
+                        .padding(.top, 8)
+                }
+            } else {
+                Text("O₂")
+                    .font(.system(size: 52, weight: .semibold, design: .rounded))
+                    .foregroundStyle(vm.spo2 > 0 ? spo2Color : .white.opacity(0.22))
+                Text(vm.spo2 > 0 ? "\(vm.spo2)" : "—")
+                    .font(.system(size: 104, weight: .bold, design: .rounded))
+                    .foregroundStyle(vm.spo2 > 0 ? .white : .white.opacity(0.30))
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.35), value: vm.spo2)
+                Text(UiStrings.shared.percent)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .tracking(8)
+                    .foregroundStyle(vm.spo2 > 0 ? .white.opacity(0.45) : .white.opacity(0.25))
+                if vm.spo2 > 0 {
+                    spo2ZoneLabel(vm.spo2)
+                } else if !vm.isMonitoring {
+                    Text(vm.lastDeviceName.isEmpty ? UiStrings.shared.noDeviceYet : UiStrings.shared.tapStartToMeasure)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.white.opacity(0.08), in: Capsule())
+                        .padding(.top, 8)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+    }
+
     private var statusText: String {
         if vm.isMonitoring { return vm.detail }
         return vm.lastDeviceName.isEmpty
             ? UiStrings.shared.notMonitoring
             : UiStrings.shared.nameNotMeasuring(name: vm.lastDeviceName)
-    }
-
-    private var spo2Color: Color {
-        Color(red: 0.30, green: 0.79, blue: 0.69)
     }
 
     @ViewBuilder
@@ -199,7 +221,6 @@ struct MonitorView: View {
     }
 
     private func zone(_ bpm: Int) -> (String, Color) {
-        if bpm <= 0 { return ("—", .white.opacity(0.4)) }
         switch bpm {
         case ..<60: return (UiStrings.shared.zoneRest, Color(red: 0.45, green: 0.80, blue: 1.0))
         case 60..<100: return (UiStrings.shared.zoneNormal, .green.opacity(0.9))

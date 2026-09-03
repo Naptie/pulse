@@ -12,9 +12,12 @@ struct ContentView: View {
                 DevicesView(vm: vm, tab: $tab)
                     .tabItem { Label(UiStrings.shared.tabDevices, systemImage: "dot.radiowaves.left.and.right") }
                     .tag(0)
-                MonitorView(vm: vm, tab: $tab)
-                    .tabItem { Label(UiStrings.shared.tabVitals, systemImage: "heart.fill") }
+                HeartRateView(vm: vm, tab: $tab)
+                    .tabItem { Label(UiStrings.shared.tabHeartRate, systemImage: "heart.fill") }
                     .tag(1)
+                BloodOxygenView(vm: vm, tab: $tab)
+                    .tabItem { Label(UiStrings.shared.tabBloodOxygen, systemImage: "drop.fill") }
+                    .tag(2)
             }
             .tint(Color(red: 1.0, green: 0.22, blue: 0.37))
         }

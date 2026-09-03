@@ -97,6 +97,9 @@ that are not BLE:
 - Android: classic discovery (BLUETOOTH_SCAN) + RFCOMM socket
   (`00001101-0000-1000-8000-00805f9b34fb`), merged with the BLE scan via
   `AndroidHybridPlatform`; the engine and UIs are unchanged
+- Device capability badges are only claimed after a valid vitals frame is
+  received from that device — classic scan hits (laptops, keyboards) stay
+  plain entries until they prove they talk the protocol
 - iOS: CoreBluetooth has no classic-SPP access — that path needs MFi-certified
   accessory hardware, so this branch keeps the BLE-only iOS platform
 - Parser unit tests: `./gradlew :shared:testDebugUnitTest`

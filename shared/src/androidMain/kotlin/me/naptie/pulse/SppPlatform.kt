@@ -54,7 +54,9 @@ class SppPlatform(private val engine: PulseEngine) : PulsePlatform {
                         val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
                         val name = device.name ?: UiStrings.unnamedDevice
                         val id = device.address
-                        devices[id] = DeviceInfo(id, name, 0, hr = true, spo2 = true)
+                        // Capabilities are unknown until this device actually
+                        // delivers a valid vitals frame; never guess here.
+                        devices[id] = DeviceInfo(id, name, 0, hr = false, spo2 = false)
                         emit()
                     }
                 }
@@ -125,10 +127,21 @@ class SppPlatform(private val engine: PulseEngine) : PulsePlatform {
                     }
                     if (n <= 0) break
                     val lines = decoder.push(buf.copyOfRange(0, n))
+                    var upgraded = false
                     for (line in lines) {
                         SppVitalsParser.parseLine(line)?.let { r ->
                             r.bpm?.let { bpm -> main.post { engine.onBpm(bpm) } }
                             r.spo2?.let { spo2 -> main.post { engine.onSpo2(spo2) } }
+                            if (r.bpm != null || r.spo2 != null) upgraded = true
+                        }
+                    }
+                    if (upgraded) {
+                        main.post {
+                            val cur = devices[deviceId]
+                            if (cur != null && (!cur.hr || !cur.spo2)) {
+                                devices[deviceId] = cur.copy(hr = true, spo2 = true)
+                                (reportDevices ?: { engine.onDevices(it) })(devices.values.toList())
+                            }
                         }
                     }
                 }
